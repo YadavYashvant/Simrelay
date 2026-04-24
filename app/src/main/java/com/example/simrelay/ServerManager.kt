@@ -49,7 +49,7 @@ object ServerManager {
                         SmsSender.send(to, message)
                         call.respond(mapOf("status" to "sent"))
 
-                    } catch (e: Exception) {
+                    } catch (_: Exception) {
                         call.respond(
                             HttpStatusCode.InternalServerError,
                             mapOf("status" to "failed")

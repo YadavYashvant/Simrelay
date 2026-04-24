@@ -32,7 +32,12 @@ data class SimRelayUiState(
     ),
 )
 
-enum class SimRelayTab { Console, Messages, Devices, Logs }
+enum class SimRelayTab(val title: String, val subtitle: String) {
+    Console("Console", "Server overview"),
+    Messages("Messages", "Relay form"),
+    Devices("Devices", "Connected devices"),
+    Logs("Logs", "Live request log")
+}
 
 class SimRelayViewModel : ViewModel() {
 
@@ -103,4 +108,3 @@ class SimRelayViewModel : ViewModel() {
         }
     }
 }
-
