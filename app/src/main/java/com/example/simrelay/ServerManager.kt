@@ -13,11 +13,13 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
-import io.ktor.websocket.WebSocketDeflateExtension.Companion.install
 
 object ServerManager {
 
     private var server: ApplicationEngine? = null
+
+    val isRunning: Boolean
+        get() = server != null
 
     fun startServer() {
 
