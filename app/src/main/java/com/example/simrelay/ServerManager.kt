@@ -14,6 +14,16 @@ import io.ktor.server.routing.*
 import java.net.NetworkInterface
 import android.content.Context
 import android.util.Log
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class ApiResponse(val ok: Boolean, val status: String? = null, val error: String? = null)
+
+@Serializable
+data class HealthResponse(val ok: Boolean, val status: String)
+
+@Serializable
+data class SendSmsRequest(val to: String, val message: String)
 
 object ServerManager {
 
@@ -61,7 +71,7 @@ object ServerManager {
                                 val apiKey = call.request.headers["x-api-key"]
                                 if (apiKey != ConfigManager.getApiKey()) {
                                     LogRepository.addLog(method, path, 401, "Invalid API Key")
-                                    call.respond(HttpStatusCode.Unauthorized, mapOf("ok" to false, "error" to "Invalid API Key"))
+                                    call.respond(HttpStatusCode.Unauthorized, ApiResponse(ok = false, error = "Invalid API Key"))
                                     finish()
                                 }
                             }
@@ -70,36 +80,36 @@ object ServerManager {
                                 val method = call.request.local.method.value
                                 val path = call.request.uri
                                 try {
-                                    val body = call.receive<Map<String, String>>()
-                                    val to = body["to"]
-                                    val message = body["message"]
+                                    val request = call.receive<SendSmsRequest>()
+                                    val to = request.to
+                                    val message = request.message
 
-                                    if (to.isNullOrBlank() || message.isNullOrBlank()) {
+                                    if (to.isBlank() || message.isBlank()) {
                                         LogRepository.addLog(method, path, 400, "Missing to or message")
-                                        return@post call.respond(HttpStatusCode.BadRequest, mapOf("ok" to false, "error" to "Missing 'to' or 'message'"))
+                                        return@post call.respond(HttpStatusCode.BadRequest, ApiResponse(ok = false, error = "Missing 'to' or 'message'"))
                                     }
 
                                     if (to.length < 5) {
                                         LogRepository.addLog(method, path, 400, "Invalid phone number")
-                                        return@post call.respond(HttpStatusCode.BadRequest, mapOf("ok" to false, "error" to "Invalid phone number"))
+                                        return@post call.respond(HttpStatusCode.BadRequest, ApiResponse(ok = false, error = "Invalid phone number"))
                                     }
 
                                     try {
                                         SmsSender.send(context, to, message)
                                         LogRepository.addLog(method, path, 200, "SMS queued for $to")
-                                        call.respond(HttpStatusCode.OK, mapOf("ok" to true, "status" to "sent"))
+                                        call.respond(HttpStatusCode.OK, ApiResponse(ok = true, status = "sent"))
                                     } catch (e: Exception) {
                                         LogRepository.addLog(method, path, 500, e.message ?: "SmsSender error")
-                                        call.respond(HttpStatusCode.InternalServerError, mapOf("ok" to false, "error" to (e.message ?: "Failed to send SMS")))
+                                        call.respond(HttpStatusCode.InternalServerError, ApiResponse(ok = false, error = (e.message ?: "Failed to send SMS")))
                                     }
                                 } catch (e: Exception) {
                                     LogRepository.addLog(method, path, 500, e.message ?: "Server error")
-                                    call.respond(HttpStatusCode.InternalServerError, mapOf("ok" to false, "error" to (e.message ?: "Unknown error")))
+                                    call.respond(HttpStatusCode.InternalServerError, ApiResponse(ok = false, error = (e.message ?: "Unknown error")))
                                 }
                             }
 
                             get("/health") {
-                                call.respond(HttpStatusCode.OK, mapOf("ok" to true, "status" to "ok"))
+                                call.respond(HttpStatusCode.OK, HealthResponse(ok = true, status = "ok"))
                             }
                         }
                     }
