@@ -11,41 +11,69 @@ import androidx.annotation.RequiresApi
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import com.example.simrelay.ServerManager
+import com.example.simrelay.NetworkMonitor
+import android.util.Log
+import com.example.simrelay.SmsSender
 
 class SmsService : Service() {
 
+    private var networkMonitor: NetworkMonitor? = null
+
     override fun onCreate() {
         super.onCreate()
-        // Ktor server will be started in onStartCommand to ensure foreground is active
+        Log.i("SmsService", "Service created")
+        SmsSender.registerReceivers(this)
+        networkMonitor = NetworkMonitor(this) { ip ->
+            Log.d("SmsService", "Network changed: $ip")
+            updateNotification(ip)
+            if (ip != null) {
+                ServerManager.startServer(this)
+            } else {
+                Log.w("SmsService", "No IP available, server will wait.")
+            }
+        }
+        networkMonitor?.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         createNotificationChannel()
         
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("SimRelay SMS Gateway")
-            .setContentText("Local server is listening on port 3000")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
+        val ip = ServerManager.getLocalIpAddress()
+        Log.i("SmsService", "onStartCommand: Received intent, current ip=$ip")
+        startForeground(NOTIFICATION_ID, createNotification(ip))
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-
-        // Start server if not running
-        if (!ServerManager.isRunning) {
-            ServerManager.startServer()
+        // Ensure server is starting if we have an IP and it's not already running
+        if (ip != null) {
+            if (!ServerManager.isRunning) {
+                Log.d("SmsService", "Server not running, attempting to start from onStartCommand")
+                ServerManager.startServer(this)
+            } else {
+                Log.d("SmsService", "Server already running, skipping start in onStartCommand")
+            }
         }
 
         return START_STICKY
     }
 
+    private fun updateNotification(ip: String?) {
+        Log.d("SmsService", "Updating notification for IP: $ip")
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification(ip))
+    }
+
+    private fun createNotification(ip: String?) = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("SimRelay SMS Gateway")
+        .setContentText(if (ip != null) "Listening on http://$ip:3000" else "Waiting for network...")
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setPriority(NotificationCompat.PRIORITY_LOW)
+        .setOngoing(true)
+        .build()
+
     override fun onDestroy() {
+        Log.d("SmsService", "Service destroying")
+        networkMonitor?.stop()
         ServerManager.stopServer()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 

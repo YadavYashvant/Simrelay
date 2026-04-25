@@ -66,10 +66,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import android.Manifest
 import android.os.Build
+import androidx.compose.runtime.setValue
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ConfigManager.init(this)
         enableEdgeToEdge()
         setContent {
             SimrelayTheme {
@@ -79,7 +81,10 @@ class MainActivity : ComponentActivity() {
 
                 val permissionsLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions()
-                ) { _ -> }
+                ) { permissions ->
+                    val smsGranted = permissions[Manifest.permission.SEND_SMS] ?: false
+                    vm.updateSmsPermission(smsGranted)
+                }
 
                 LaunchedEffect(Unit) {
                     val permissions = mutableListOf(Manifest.permission.SEND_SMS)
@@ -127,7 +132,7 @@ fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: M
                 ServerStatusCard(state = state, onStart = {onAction.startServer(context)}, onStop = {onAction.stopServer(context)})
                 when (state.selectedTab) {
                     SimRelayTab.Console -> {
-                        ApiKeyCard(apiKey = state.apiKey)
+                        ApiKeyCard(state = state, onRegenerate = onAction::regenerateApiKey)
                         RecentLogsCard(state = state)
                     }
                     SimRelayTab.Messages -> {
@@ -139,7 +144,7 @@ fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: M
                         )
                     }
                     SimRelayTab.Devices -> DevicesCard()
-                    SimRelayTab.Logs -> RecentLogsCard(state = state)
+                    SimRelayTab.Logs -> LogsListCard(state = state)
                 }
                 state.errorMessage?.let { InfoBanner(text = it, color = SimRelayColors.Error) }
                 state.smsStatus?.let { InfoBanner(text = it, color = SimRelayColors.Success) }
@@ -278,19 +283,29 @@ private fun AddressCard(host: String, port: Int) {
 }
 
 @Composable
-private fun ApiKeyCard(apiKey: String) {
+private fun ApiKeyCard(state: SimRelayUiState, onRegenerate: () -> Unit) {
     val clipboard = LocalClipboardManager.current
+    var masked by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(true) }
+    
     GlassCard {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⌁", color = SimRelayColors.TextSecondary)
-                Spacer(Modifier.width(10.dp))
-                Text("API KEY", color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("⌁", color = SimRelayColors.TextSecondary)
+                    Spacer(Modifier.width(10.dp))
+                    Text("API KEY", color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                }
+                Text("Regenerate", color = SimRelayColors.Accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.clickable { onRegenerate() })
             }
             Surface(shape = RoundedCornerShape(16.dp), color = SimRelayColors.SurfaceElevated.copy(alpha = 0.9f), border = BorderStroke(1.dp, SimRelayColors.Border)) {
-                Row(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(apiKey, color = SimRelayColors.TextPrimary, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    IconButton(onClick = { clipboard.setText(AnnotatedString(apiKey)) }) { Text("⧉", color = SimRelayColors.TextPrimary) }
+                Row(modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (masked) "••••••••••••••••" else state.apiKey, 
+                        color = SimRelayColors.TextPrimary, 
+                        style = MaterialTheme.typography.titleMedium, 
+                        modifier = Modifier.weight(1f).clickable { masked = !masked }
+                    )
+                    IconButton(onClick = { clipboard.setText(AnnotatedString(state.apiKey)) }) { Text("⧉", color = SimRelayColors.TextPrimary) }
                 }
             }
         }
@@ -348,7 +363,7 @@ private fun RecentLogsCard(state: SimRelayUiState) {
                 }
                 Text("LIVE", color = SimRelayColors.Cyan, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             }
-            state.recentLogs.forEachIndexed { index, log ->
+            state.logs.take(5).forEachIndexed { index, log ->
                 if (index > 0) Spacer(Modifier.height(6.dp))
                 LogRow(log)
             }
@@ -357,10 +372,32 @@ private fun RecentLogsCard(state: SimRelayUiState) {
 }
 
 @Composable
-private fun LogRow(log: RecentLog) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(log.code, color = SimRelayColors.Success, fontWeight = FontWeight.SemiBold)
-        Text("${log.method}  ${log.path}", color = SimRelayColors.TextSecondary)
+private fun LogsListCard(state: SimRelayUiState) {
+    GlassCard {
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("FULL REQUEST HISTORY", color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            state.logs.forEach { log ->
+                LogRow(log)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LogRow(log: ApiLog) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val color = if (log.statusCode < 300) SimRelayColors.Success else SimRelayColors.Error
+                Text(log.statusCode.toString(), color = color, fontWeight = FontWeight.Bold)
+                Text(log.method, color = SimRelayColors.TextPrimary, fontWeight = FontWeight.SemiBold)
+                Text(log.timestamp, color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.labelSmall)
+            }
+            Text(log.path, color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.bodySmall)
+            if (log.detail.isNotEmpty()) {
+                Text(log.detail, color = SimRelayColors.TextSecondary.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+            }
+        }
     }
 }
 

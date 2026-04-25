@@ -10,32 +10,26 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
 import java.net.HttpURLConnection
-import java.net.NetworkInterface
 import java.net.URL
-import kotlin.concurrent.thread
 import org.json.JSONObject
-
-data class RecentLog(
-    val code: String,
-    val method: String,
-    val path: String,
-)
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 
 data class SimRelayUiState(
     val serverRunning: Boolean = false,
     val serverStarting: Boolean = false,
     val serverPort: Int = 3000,
     val serverHost: String = "localhost",
-    val apiKey: String = "sk_test_simrelay_8f92",
+    val apiKey: String = "",
     val lastActionMessage: String = "Ready to start",
     val selectedTab: SimRelayTab = SimRelayTab.Console,
     val smsTo: String = "",
     val smsMessage: String = "",
     val smsStatus: String? = null,
     val errorMessage: String? = null,
-    val recentLogs: List<RecentLog> = emptyList(),
+    val logs: List<ApiLog> = emptyList(),
+    val hasSmsPermission: Boolean = false,
 )
 
 enum class SimRelayTab(val title: String, val subtitle: String) {
@@ -51,31 +45,34 @@ class SimRelayViewModel : ViewModel() {
     val uiState: StateFlow<SimRelayUiState> = _uiState.asStateFlow()
 
     init {
+        _uiState.update { it.copy(apiKey = ConfigManager.getApiKey()) }
         updateLocalIp()
+        
+        // Observe logs
+        viewModelScope.launch {
+            LogRepository.logs.collect { logs ->
+                _uiState.update { it.copy(logs = logs) }
+            }
+        }
+        
+        // Monitor server state (simple polling or state flow)
+        viewModelScope.launch {
+            while(true) {
+                val running = ServerManager.isRunning
+                val ip = ServerManager.getLocalIpAddress() ?: "localhost"
+                _uiState.update { it.copy(serverRunning = running, serverHost = ip) }
+                kotlinx.coroutines.delay(2000)
+            }
+        }
+    }
+
+    fun updateSmsPermission(granted: Boolean) {
+        _uiState.update { it.copy(hasSmsPermission = granted) }
     }
 
     private fun updateLocalIp() {
-        val ip = getLocalIpAddress() ?: "localhost"
+        val ip = ServerManager.getLocalIpAddress() ?: "localhost"
         _uiState.update { it.copy(serverHost = ip) }
-    }
-
-    private fun getLocalIpAddress(): String? {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                val addresses = iface.inetAddresses
-                while (addresses.hasMoreElements()) {
-                    val addr = addresses.nextElement()
-                    if (!addr.isLoopbackAddress && addr.hostAddress.indexOf(':') < 0) {
-                        return addr.hostAddress
-                    }
-                }
-            }
-        } catch (ex: Exception) {
-            ex.printStackTrace()
-        }
-        return null
     }
 
     fun selectTab(tab: SimRelayTab) {
@@ -90,23 +87,30 @@ class SimRelayViewModel : ViewModel() {
         _uiState.update { it.copy(smsMessage = value, smsStatus = null, errorMessage = null) }
     }
 
+    fun regenerateApiKey() {
+        val newKey = ConfigManager.regenerateApiKey()
+        _uiState.update { it.copy(apiKey = newKey) }
+    }
+
     fun startServer(context: Context) {
+        if (!_uiState.value.hasSmsPermission) {
+            _uiState.update { it.copy(errorMessage = "SMS permission required to start server") }
+            return
+        }
         if (_uiState.value.serverRunning || _uiState.value.serverStarting) return
 
         _uiState.update { it.copy(serverStarting = true, lastActionMessage = "Starting service...") }
 
-        thread {
+        viewModelScope.launch {
             try {
+                ConfigManager.init(context)
                 val intent = Intent(context, SmsService::class.java)
                 context.startForegroundService(intent)
                 
-                // For simplicity, we assume it starts. 
-                // In production, we'd use a broadcast or bound service to confirm.
                 _uiState.update {
                     it.copy(
-                        serverRunning = true,
                         serverStarting = false,
-                        lastActionMessage = "Server running on port ${it.serverPort}"
+                        lastActionMessage = "Service started"
                     )
                 }
             } catch (e: Exception) {
@@ -143,51 +147,58 @@ class SimRelayViewModel : ViewModel() {
             return
         }
 
-        _uiState.update { it.copy(smsStatus = "Sending...", errorMessage = null) }
+        _uiState.update { it.copy(smsStatus = "Sending via local API...", errorMessage = null) }
 
-        // Trigger SMS via Local API (Self-test)
-        viewModelScope.launch {
-            thread {
-                try {
-                    val url = URL("http://localhost:${state.serverPort}/send-sms")
-                    val conn = url.openConnection() as HttpURLConnection
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-api-key", state.apiKey)
-                    conn.doOutput = true
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val url = URL("http://localhost:${state.serverPort}/send-sms")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.setRequestProperty("x-api-key", state.apiKey)
+                conn.doOutput = true
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
 
-                    val json = JSONObject().apply {
-                        put("to", state.smsTo)
-                        put("message", state.smsMessage)
+                val json = JSONObject().apply {
+                    put("to", state.smsTo)
+                    put("message", state.smsMessage)
+                }
+
+                conn.outputStream.use { it.write(json.toString().toByteArray()) }
+
+                val responseCode = conn.responseCode
+                val responseBody = if (responseCode == HttpURLConnection.HTTP_OK) {
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Error"
+                }
+                
+                val responseJson = JSONObject(responseBody)
+                val ok = responseJson.optBoolean("ok", false)
+
+                if (ok) {
+                    _uiState.update {
+                        it.copy(
+                            smsStatus = "Sent successfully via API",
+                            errorMessage = null
+                        )
                     }
-
-                    conn.outputStream.use { it.write(json.toString().toByteArray()) }
-
-                    val responseCode = conn.responseCode
-                    if (responseCode == HttpURLConnection.HTTP_OK) {
-                        _uiState.update {
-                            it.copy(
-                                smsStatus = "Sent successfully via API",
-                                recentLogs = listOf(RecentLog("200", "POST", "/send-sms")) + it.recentLogs.take(9)
-                            )
-                        }
-                    } else {
-                        val error = conn.errorStream?.bufferedReader()?.use { it.readText() } ?: "Unknown error"
-                        _uiState.update {
-                            it.copy(
-                                smsStatus = null,
-                                errorMessage = "API Error ($responseCode): $error",
-                                recentLogs = listOf(RecentLog(responseCode.toString(), "POST", "/send-sms")) + it.recentLogs.take(9)
-                            )
-                        }
-                    }
-                } catch (e: Exception) {
+                } else {
+                    val error = responseJson.optString("error", "Unknown error")
                     _uiState.update {
                         it.copy(
                             smsStatus = null,
-                            errorMessage = "Relay failed: ${e.message}"
+                            errorMessage = "API Error ($responseCode): $error"
                         )
                     }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        smsStatus = null,
+                        errorMessage = "Relay failed: ${e.message}"
+                    )
                 }
             }
         }
