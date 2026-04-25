@@ -69,14 +69,16 @@ class MainActivity : ComponentActivity() {
             SimrelayTheme {
                 val vm: SimRelayViewModel = viewModel()
                 val state by vm.uiState.collectAsState()
-                SimRelayApp(state = state, onAction = vm)
+                val context = LocalContext.current
+                SimRelayApp(state = state, onAction = vm, context = context)
             }
         }
     }
 }
 
 @Composable
-fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: Modifier = Modifier) {
+fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: Modifier = Modifier, context: Context) {
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = SimRelayColors.Background,
@@ -103,7 +105,7 @@ fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: M
             ) {
                 SimRelayHeader()
                 TabHero(state.selectedTab)
-                ServerStatusCard(state = state, onStart = onAction::startServer, onStop = onAction::stopServer)
+                ServerStatusCard(state = state, onStart = {onAction.startServer(context)}, onStop = {onAction.stopServer(context)})
                 when (state.selectedTab) {
                     SimRelayTab.Console -> {
                         ApiKeyCard(apiKey = state.apiKey)
@@ -374,6 +376,7 @@ private fun bottomTabs() = listOf(
     BottomTab(SimRelayTab.Logs, "Logs"),
 )
 
+/*
 @Preview(showBackground = true)
 @Composable
 private fun SimRelayPreview() {
@@ -381,3 +384,4 @@ private fun SimRelayPreview() {
         SimRelayApp(state = SimRelayUiState(), onAction = SimRelayViewModel())
     }
 }
+ */

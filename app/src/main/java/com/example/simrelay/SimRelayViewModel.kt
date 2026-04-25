@@ -1,7 +1,10 @@
 package com.example.simrelay
 
+import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.simrelay.services.SmsService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,39 +59,31 @@ class SimRelayViewModel : ViewModel() {
         _uiState.update { it.copy(smsMessage = value, smsStatus = null, errorMessage = null) }
     }
 
-    fun startServer() {
+    fun startServer(context: Context) {
         if (_uiState.value.serverRunning || _uiState.value.serverStarting) return
-        _uiState.update { it.copy(serverStarting = true, errorMessage = null) }
-        viewModelScope.launch {
-            runCatching { ServerManager.startServer() }
-                .onSuccess {
-                    _uiState.update {
-                        it.copy(
-                            serverRunning = true,
-                            serverStarting = false,
-                            lastActionMessage = "Accepting connections",
-                        )
-                    }
-                }
-                .onFailure { throwable ->
-                    _uiState.update {
-                        it.copy(
-                            serverStarting = false,
-                            serverRunning = false,
-                            errorMessage = throwable.message ?: "Failed to start server",
-                        )
-                    }
-                }
+
+        _uiState.update { it.copy(serverStarting = true) }
+
+        val intent = Intent(context, SmsService::class.java)
+        context.startForegroundService(intent)
+
+        _uiState.update {
+            it.copy(
+                serverRunning = true,
+                serverStarting = false,
+                lastActionMessage = "Server running"
+            )
         }
     }
 
-    fun stopServer() {
-        runCatching { ServerManager.stopServer() }
+    fun stopServer(context: Context) {
+        val intent = Intent(context, SmsService::class.java)
+        context.stopService(intent)
+
         _uiState.update {
             it.copy(
                 serverRunning = false,
-                serverStarting = false,
-                lastActionMessage = "Server stopped",
+                lastActionMessage = "Server stopped"
             )
         }
     }
