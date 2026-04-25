@@ -30,15 +30,6 @@ data class SimRelayUiState(
     val errorMessage: String? = null,
     val logs: List<ApiLog> = emptyList(),
     val hasSmsPermission: Boolean = false,
-    val discoveredDevices: List<DiscoveredDevice> = emptyList(),
-)
-
-data class DiscoveredDevice(
-    val name: String,
-    val host: String,
-    val port: Int,
-    val isLive: Boolean = true,
-    val lastSeen: Long = System.currentTimeMillis()
 )
 
 enum class SimRelayTab(val title: String, val subtitle: String) {
@@ -52,8 +43,6 @@ class SimRelayViewModel : ViewModel() {
 
     private val _uiState = MutableStateFlow(SimRelayUiState())
     val uiState: StateFlow<SimRelayUiState> = _uiState.asStateFlow()
-
-    private var nsdHelper: NsdHelper? = null
 
     init {
         _uiState.update { it.copy(apiKey = ConfigManager.getApiKey()) }
@@ -75,36 +64,6 @@ class SimRelayViewModel : ViewModel() {
                 kotlinx.coroutines.delay(2000)
             }
         }
-    }
-
-    fun initDiscovery(context: Context) {
-        if (nsdHelper != null) return
-        
-        nsdHelper = NsdHelper(context).apply {
-            startDiscovery(object : NsdHelper.DiscoveryListener {
-                override fun onServiceFound(name: String, host: String, port: Int) {
-                    _uiState.update { state ->
-                        val device = DiscoveredDevice(name, host, port)
-                        val newList = state.discoveredDevices.filter { it.name != name } + device
-                        state.copy(discoveredDevices = newList)
-                    }
-                }
-
-                override fun onServiceLost(name: String) {
-                    _uiState.update { state ->
-                        val newList = state.discoveredDevices.map { 
-                            if (it.name == name) it.copy(isLive = false) else it 
-                        }
-                        state.copy(discoveredDevices = newList)
-                    }
-                }
-            })
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        nsdHelper?.stopDiscovery()
     }
 
     fun updateSmsPermission(granted: Boolean) {

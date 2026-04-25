@@ -7,23 +7,16 @@ import io.ktor.server.engine.ApplicationEngine
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.ContentTransformationException
 import io.ktor.server.request.receive
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.routing.*
+import kotlinx.serialization.json.Json
 import java.net.NetworkInterface
 import android.content.Context
+import android.os.Build
 import android.util.Log
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class ApiResponse(val ok: Boolean, val status: String? = null, val error: String? = null)
-
-@Serializable
-data class HealthResponse(val ok: Boolean, val status: String)
-
-@Serializable
-data class SendSmsRequest(val to: String, val message: String)
 
 object ServerManager {
 
@@ -58,58 +51,82 @@ object ServerManager {
                     
                     val engine = embeddedServer(Netty, port = PORT, host = "0.0.0.0") {
                         install(ContentNegotiation) {
-                            json()
+                            json(
+                                Json {
+                                    ignoreUnknownKeys = true
+                                    isLenient = true
+                                    encodeDefaults = true
+                                }
+                            )
                         }
 
                         routing {
-                            intercept(ApplicationCallPipeline.Call) {
-                                val method = call.request.local.method.value
-                                val path = call.request.uri
-                                
-                                if (path == "/health") return@intercept
-                                
-                                val apiKey = call.request.headers["x-api-key"]
-                                if (apiKey != ConfigManager.getApiKey()) {
-                                    LogRepository.addLog(method, path, 401, "Invalid API Key")
-                                    call.respond(HttpStatusCode.Unauthorized, ApiResponse(ok = false, error = "Invalid API Key"))
-                                    finish()
-                                }
-                            }
-
                             post("/send-sms") {
                                 val method = call.request.local.method.value
                                 val path = call.request.uri
                                 try {
-                                    val request = call.receive<SendSmsRequest>()
-                                    val to = request.to
-                                    val message = request.message
+                                    val body = call.receive<SendSmsRequest>()
+                                    val to = body.to.trim()
+                                    val message = body.message
+                                    val requestApiKey = body.apiKey?.trim().orEmpty()
+                                    val headerApiKey = call.request.headers["x-api-key"]?.trim().orEmpty()
+                                    val providedApiKey = if (headerApiKey.isNotEmpty()) headerApiKey else requestApiKey
+
+                                    if (providedApiKey != ConfigManager.getApiKey()) {
+                                        LogRepository.addLog(method, path, 401, "Invalid API Key")
+                                        return@post call.respond(
+                                            HttpStatusCode.Unauthorized,
+                                            ApiErrorResponse(error = "Invalid API Key")
+                                        )
+                                    }
 
                                     if (to.isBlank() || message.isBlank()) {
                                         LogRepository.addLog(method, path, 400, "Missing to or message")
-                                        return@post call.respond(HttpStatusCode.BadRequest, ApiResponse(ok = false, error = "Missing 'to' or 'message'"))
+                                        return@post call.respond(
+                                            HttpStatusCode.BadRequest,
+                                            ApiErrorResponse(error = "Missing 'to' or 'message'")
+                                        )
                                     }
 
                                     if (to.length < 5) {
                                         LogRepository.addLog(method, path, 400, "Invalid phone number")
-                                        return@post call.respond(HttpStatusCode.BadRequest, ApiResponse(ok = false, error = "Invalid phone number"))
+                                        return@post call.respond(
+                                            HttpStatusCode.BadRequest,
+                                            ApiErrorResponse(error = "Invalid phone number")
+                                        )
                                     }
 
                                     try {
                                         SmsSender.send(context, to, message)
                                         LogRepository.addLog(method, path, 200, "SMS queued for $to")
-                                        call.respond(HttpStatusCode.OK, ApiResponse(ok = true, status = "sent"))
+                                        call.respond(HttpStatusCode.OK, SendSmsResponse(to = to))
                                     } catch (e: Exception) {
                                         LogRepository.addLog(method, path, 500, e.message ?: "SmsSender error")
-                                        call.respond(HttpStatusCode.InternalServerError, ApiResponse(ok = false, error = (e.message ?: "Failed to send SMS")))
+                                        call.respond(
+                                            HttpStatusCode.InternalServerError,
+                                            ApiErrorResponse(error = e.message ?: "Failed to send SMS")
+                                        )
                                     }
+                                } catch (e: ContentTransformationException) {
+                                    LogRepository.addLog(method, path, 400, "Invalid JSON body")
+                                    call.respond(
+                                        HttpStatusCode.BadRequest,
+                                        ApiErrorResponse(error = "Invalid request body")
+                                    )
                                 } catch (e: Exception) {
                                     LogRepository.addLog(method, path, 500, e.message ?: "Server error")
-                                    call.respond(HttpStatusCode.InternalServerError, ApiResponse(ok = false, error = (e.message ?: "Unknown error")))
+                                    call.respond(
+                                        HttpStatusCode.InternalServerError,
+                                        ApiErrorResponse(error = e.message ?: "Unknown error")
+                                    )
                                 }
                             }
 
                             get("/health") {
-                                call.respond(HttpStatusCode.OK, HealthResponse(ok = true, status = "ok"))
+                                call.respond(
+                                    HttpStatusCode.OK,
+                                    HealthResponse(device = "${Build.MANUFACTURER} ${Build.MODEL}".trim())
+                                )
                             }
                         }
                     }
@@ -187,8 +204,9 @@ object ServerManager {
                 val addresses = iface.inetAddresses
                 while (addresses.hasMoreElements()) {
                     val addr = addresses.nextElement()
-                    if (!addr.isLoopbackAddress && addr.hostAddress.indexOf(':') < 0) {
-                        return addr.hostAddress
+                    val hostAddress = addr.hostAddress
+                    if (!addr.isLoopbackAddress && !hostAddress.isNullOrBlank() && hostAddress.indexOf(':') < 0) {
+                        return hostAddress
                     }
                 }
             }
