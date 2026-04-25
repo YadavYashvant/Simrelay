@@ -92,7 +92,6 @@ class MainActivity : ComponentActivity() {
                         permissions.add(Manifest.permission.POST_NOTIFICATIONS)
                     }
                     permissionsLauncher.launch(permissions.toTypedArray())
-                    vm.initDiscovery(context)
                 }
 
                 SimRelayApp(state = state, onAction = vm, context = context)
@@ -144,7 +143,7 @@ fun SimRelayApp(state: SimRelayUiState, onAction: SimRelayViewModel, modifier: M
                             onSend = onAction::sendSms,
                         )
                     }
-                    SimRelayTab.Devices -> DevicesCard(state = state)
+                    SimRelayTab.Devices -> DevicesCard()
                     SimRelayTab.Logs -> LogsListCard(state = state)
                 }
                 state.errorMessage?.let { InfoBanner(text = it, color = SimRelayColors.Error) }
@@ -331,17 +330,12 @@ private fun SmsComposeCard(
 }
 
 @Composable
-private fun DevicesCard(state: SimRelayUiState) {
+private fun DevicesCard() {
     GlassCard {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("CONNECTED DEVICES", color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            if (state.discoveredDevices.isEmpty()) {
-                Text("Searching for devices...", color = SimRelayColors.TextSecondary, style = MaterialTheme.typography.bodyMedium)
-            } else {
-                state.discoveredDevices.forEach { device ->
-                    DeviceRow(device.name, device.host, device.isLive)
-                }
-            }
+            DeviceRow("Pixel 8", "192.168.1.12", true)
+            DeviceRow("Galaxy S23", "192.168.1.18", false)
         }
     }
 }
