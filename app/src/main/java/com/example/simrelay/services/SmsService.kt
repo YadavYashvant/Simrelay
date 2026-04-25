@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.annotation.RequiresApi
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import com.example.simrelay.ServerManager
 
@@ -15,36 +16,57 @@ class SmsService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-
-        // Start server when service starts
-        ServerManager.startServer()
+        // Ktor server will be started in onStartCommand to ensure foreground is active
     }
 
-    @SuppressLint("ForegroundServiceType")
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-
-        val channelId = "simrelay"
-
-        val channel = NotificationChannel(
-            channelId,
-            "SimRelay Service",
-            NotificationManager.IMPORTANCE_LOW
-        )
-
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
-
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("SimRelay Running")
-            .setContentText("Listening on port 3000")
+        createNotificationChannel()
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("SimRelay SMS Gateway")
+            .setContentText("Local server is listening on port 3000")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
             .build()
 
-        startForeground(1, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+
+        // Start server if not running
+        if (!ServerManager.isRunning) {
+            ServerManager.startServer()
+        }
 
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        ServerManager.stopServer()
+        super.onDestroy()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "SimRelay Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keep SimRelay SMS Gateway running in background"
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
     override fun onBind(intent: Intent?) = null
+
+    companion object {
+        private const val CHANNEL_ID = "simrelay_channel"
+        private const val NOTIFICATION_ID = 1
+    }
 }

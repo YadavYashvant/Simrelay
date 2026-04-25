@@ -22,46 +22,41 @@ object ServerManager {
         get() = server != null
 
     fun startServer() {
-
         if (server != null) return
 
         server = embeddedServer(Netty, port = 3000) {
-
             install(ContentNegotiation) {
                 json()
             }
 
             routing {
+                intercept(io.ktor.server.application.ApplicationCallPipeline.Call) {
+                    if (call.request.local.uri == "/health") return@intercept
+                    
+                    val apiKey = call.request.headers["x-api-key"]
+                    if (apiKey != "sk_test_simrelay_8f92") {
+                        call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid API Key"))
+                        finish()
+                    }
+                }
 
                 post("/send-sms") {
-
-                    val body = call.receive<Map<String, String>>()
-
-                    val to = body["to"]
-                    val message = body["message"]
-
-                    if (to == null || message == null) {
-                        call.respond(HttpStatusCode.BadRequest)
-                        return@post
-                    }
-
                     try {
-                        SmsSender.send(to, message)
-                        call.respond(mapOf("status" to "sent"))
+                        val body = call.receive<Map<String, String>>()
+                        val to = body["to"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing 'to'"))
+                        val message = body["message"] ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing 'message'"))
 
-                    } catch (_: Exception) {
-                        call.respond(
-                            HttpStatusCode.InternalServerError,
-                            mapOf("status" to "failed")
-                        )
+                        SmsSender.send(to, message)
+                        call.respond(HttpStatusCode.OK, mapOf("status" to "sent"))
+                    } catch (e: Exception) {
+                        call.respond(HttpStatusCode.InternalServerError, mapOf("status" to "failed", "error" to (e.message ?: "Unknown error")))
                     }
                 }
 
                 get("/health") {
-                    call.respond(mapOf("status" to "ok"))
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "ok"))
                 }
             }
-
         }.start(wait = false)
     }
 

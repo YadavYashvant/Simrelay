@@ -61,6 +61,12 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.simrelay.ui.theme.SimRelayColors
 import com.example.simrelay.ui.theme.SimrelayTheme
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.LaunchedEffect
+import android.Manifest
+import android.os.Build
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +76,19 @@ class MainActivity : ComponentActivity() {
                 val vm: SimRelayViewModel = viewModel()
                 val state by vm.uiState.collectAsState()
                 val context = LocalContext.current
+
+                val permissionsLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { _ -> }
+
+                LaunchedEffect(Unit) {
+                    val permissions = mutableListOf(Manifest.permission.SEND_SMS)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    permissionsLauncher.launch(permissions.toTypedArray())
+                }
+
                 SimRelayApp(state = state, onAction = vm, context = context)
             }
         }
